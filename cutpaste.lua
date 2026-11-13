@@ -6,13 +6,13 @@
 plugin {
     id = "cutpaste",
     name = "Cut and Paste",
-    apiVersion = "2.2"
+    apiVersion = "2.2",
+    author = "Usama Ahsan",
+    url = "https://github.com/usama8800"
 }
 
 -- Pending cut: list of { file = File, raw = "/abs/path", name = "file" }
 local pending = nil
-
-local function log(msg) print("[cutpaste] " .. msg) end
 
 local function getGlobalContext()
     if marta and marta.globalContext then return marta.globalContext end
@@ -29,7 +29,6 @@ local function guarded(fn)
     return function(context)
         local ok, e = pcall(fn, context)
         if not ok then
-            log("ERROR: " .. tostring(e))
             martax.alert("cutpaste error: " .. tostring(e))
         end
     end
@@ -56,7 +55,6 @@ local function moveItems(items, folder)
         elseif not item.file:exists() then
             table.insert(skipped, item.name .. " (original no longer exists)")
         else
-            log("move " .. src .. " -> " .. destPath.rawValue)
             local sameVolume = item.file:isOnSameVolume(folder)
             local err = nil
             if sameVolume then
@@ -64,7 +62,6 @@ local function moveItems(items, folder)
             end
             if err or not sameVolume then
                 -- Different volume (or rename failed): mv copies, then deletes the original
-                log("falling back to mv (" .. tostring(err) .. ")")
                 martax.execute("/bin/mv", { "-n", src, destDir .. "/" })
             end
         end
@@ -118,7 +115,6 @@ action {
         pending = {}
         for _, f in ipairs(files) do
             table.insert(pending, { file = f, raw = f.path.rawValue, name = f.name })
-            log("cut " .. f.path.rawValue)
         end
         -- Put the files on the clipboard exactly like a normal copy would
         runCoreAction(context, "core.clipboard.copy")
