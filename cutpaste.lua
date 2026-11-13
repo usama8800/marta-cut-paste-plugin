@@ -35,12 +35,85 @@ local function guarded(fn)
     end
 end
 
+-- Move the given items into `folder`. Returns a list of skipped-item messages.
+local function moveItems(items, folder)
+    local destDirPath = folder.path
+    local destDir = destDirPath.rawValue
+    local skipped = {}
+
+    for _, item in ipairs(items) do
+        local src = item.raw
+        local srcParent = item.file.parent and item.file.parent.path.rawValue or ""
+        local destPath = destDirPath:resolve(item.name)
+        local destFile = folder:resolve(item.name)
+
+        if srcParent == destDir then
+            -- Same folder: nothing to do
+        elseif destDir == src or destDir:sub(1, #src + 1) == src .. "/" then
+            table.insert(skipped, item.name .. " (can't move a folder into itself)")
+        elseif destFile:exists() then
+            table.insert(skipped, item.name .. " (already exists here)")
+        elseif not item.file:exists() then
+            table.insert(skipped, item.name .. " (original no longer exists)")
+        else
+            log("move " .. src .. " -> " .. destPath.rawValue)
+            local sameVolume = item.file:isOnSameVolume(folder)
+            local err = nil
+            if sameVolume then
+                err = item.file:rename(destPath)
+            end
+            if err or not sameVolume then
+                -- Different volume (or rename failed): mv copies, then deletes the original
+                log("falling back to mv (" .. tostring(err) .. ")")
+                martax.execute("/bin/mv", { "-n", src, destDir .. "/" })
+            end
+        end
+    end
+    return skipped
+end
+
+local function refresh(pane)
+    if pane then pcall(function() pane.model:refresh(true, nil) end) end
+end
+
+local function reportSkipped(skipped)
+    if #skipped > 0 then
+        martax.alert("Some items were not moved:\n" .. table.concat(skipped, "\n"))
+    end
+end
+
+-- True if `files` is exactly the set of files currently pending a cut
+local function sameAsPending(files)
+    if not pending or #pending ~= #files then return false end
+    local set = {}
+    for _, item in ipairs(pending) do set[item.raw] = true end
+    for _, f in ipairs(files) do
+        if not set[f.path.rawValue] then return false end
+    end
+    return true
+end
+
 action {
     id = "cut",
     name = "Cut",
     apply = guarded(function(context)
         local files = context.activePane.model.activeFiles
         if not files or #files == 0 then return end
+
+        -- Cutting the same files a second time: move them to the other pane
+        if sameAsPending(files) then
+            local other = context.inactivePane
+            local folder = other and other.model.folder
+            if folder then
+                local items = pending
+                pending = nil
+                local skipped = moveItems(items, folder)
+                refresh(context.activePane)
+                refresh(other)
+                reportSkipped(skipped)
+                return
+            end
+        end
 
         pending = {}
         for _, f in ipairs(files) do
@@ -70,47 +143,14 @@ action {
             return
         end
 
-        local model = context.activePane.model
-        local folder = model.folder
+        local folder = context.activePane.model.folder
         if not folder then return end
-        local destDirPath = folder.path
-        local destDir = destDirPath.rawValue
 
-        local skipped = {}
-        for _, item in ipairs(pending) do
-            local src = item.raw
-            local srcParent = item.file.parent and item.file.parent.path.rawValue or ""
-            local destPath = destDirPath:resolve(item.name)
-            local destFile = folder:resolve(item.name)
-
-            if srcParent == destDir then
-                -- Pasting into the same folder: nothing to do
-            elseif destDir == src or destDir:sub(1, #src + 1) == src .. "/" then
-                table.insert(skipped, item.name .. " (can't move a folder into itself)")
-            elseif destFile:exists() then
-                table.insert(skipped, item.name .. " (already exists here)")
-            elseif not item.file:exists() then
-                table.insert(skipped, item.name .. " (original no longer exists)")
-            else
-                log("move " .. src .. " -> " .. destPath.rawValue)
-                local sameVolume = item.file:isOnSameVolume(folder)
-                local err = nil
-                if sameVolume then
-                    err = item.file:rename(destPath)
-                end
-                if err or not sameVolume then
-                    -- Different volume (or rename failed): mv copies, then deletes the original
-                    log("falling back to mv (" .. tostring(err) .. ")")
-                    martax.execute("/bin/mv", { "-n", src, destDir .. "/" })
-                end
-            end
-        end
-
+        local items = pending
         pending = nil
-        pcall(function() model:refresh(true, nil) end)
-
-        if #skipped > 0 then
-            martax.alert("Some items were not moved:\n" .. table.concat(skipped, "\n"))
-        end
+        local skipped = moveItems(items, folder)
+        refresh(context.activePane)
+        refresh(context.inactivePane)
+        reportSkipped(skipped)
     end)
 }
